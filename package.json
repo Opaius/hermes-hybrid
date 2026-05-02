@@ -4,7 +4,7 @@
   "description": "Context-mode + mcp-visibility + RTK — one install for Hermes Agent & OpenCode token efficiency",
   "license": "MIT",
   "author": "cioky",
-  "repository": "github:cioky/hermes-hybrid",
+  "repository": "github:Opaius/hermes-hybrid",
   "bin": {
     "hermes-hybrid": "./bin/cli.js",
     "hh": "./bin/cli.js"

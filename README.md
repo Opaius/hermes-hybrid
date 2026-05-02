@@ -129,7 +129,7 @@ hermes gateway restart
 
 ```bash
 # Clone and run setup
-git clone https://github.com/cioky/hermes-hybrid.git
+git clone https://github.com/Opaius/hermes-hybrid.git
 cd hermes-hybrid
 node bin/cli.js setup
 ```
