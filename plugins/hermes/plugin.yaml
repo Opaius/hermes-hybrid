@@ -1,0 +1,11 @@
+name: mcp-visibility
+version: 1.2.1
+description: "MCP tool optimizer: security guardrails, schema compaction, TOON output, result caching. Hooks-only — no wrapper tools."
+author: cioky
+kind: backend
+# No provides_tools — plugin only registers hooks, modifies native MCP tools in-place
+hooks:
+  pre_tool_call:
+    - pre_tool_call_security
+  post_tool_call:
+    - _post_tool_call_optimize
