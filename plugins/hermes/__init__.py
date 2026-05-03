@@ -24,6 +24,8 @@ from .mcp_visibility import (
     _toon_convert,
     _cache_get,
     _cache_set,
+    _RTK_ENABLED,
+    _RTK_PATH,
     SHELL_EXEC_TOOLS,
     TOOL_ALIASES,
     TOOL_EMOJIS,
@@ -188,6 +190,19 @@ def _compact_native_tool_schemas(**kwargs) -> None:
                                     "status": "blocked",
                                 }, ensure_ascii=False)
                         except ImportError:
+                            pass
+
+                    # RTK wrapping: prepend rtk to shell commands for token savings
+                    # rtk passes through if it can't handle the command
+                    if language == "shell" and code and _RTK_ENABLED:
+                        try:
+                            wrapped = f"{_RTK_PATH} -- {code}"
+                            if "code" in inner:
+                                inner["code"] = wrapped
+                            if "code" in args:
+                                args["code"] = wrapped
+                            logger.debug("mcp-visibility: rtk wrapping active — %s → %s", code[:60], wrapped[:60])
+                        except Exception:
                             pass
 
                     # Cache check

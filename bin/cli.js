@@ -141,11 +141,40 @@ function setup() {
 
   // ─── Install rtk ───
   section("Checking RTK...");
+  let rtkPath = null;
   if (hasCmd("rtk")) {
-    ok(`RTK installed: ${cmd("rtk --version 2>/dev/null", { silent: true }) || "✓"}`);
+    rtkPath = cmd("which rtk 2>/dev/null", { silent: true }) || cmd("command -v rtk 2>/dev/null", { silent: true });
+    ok(`RTK installed: ${cmd("rtk --version 2>/dev/null", { silent: true }) || "✓"} (${rtkPath})`);
   } else {
-    warn("RTK not installed — install via: curl -fsSL https://rtk.ai/install.sh | bash");
-    info("Or: brew install rtk-ai/rtk/rtk");
+    warn("RTK not installed — attempting auto-install...");
+    // Try npm first (faster), fall back to curl
+    const npmOk = cmd("npm i -g rtk 2>/dev/null", { silent: true }) !== null;
+    if (!npmOk) {
+      info("npm install failed, trying bun...");
+      const bunOk = cmd("bun i -g rtk 2>/dev/null", { silent: true }) !== null;
+      if (!bunOk) {
+        info("Bun install failed, trying curl...");
+        cmd("curl -fsSL https://rtk.ai/install.sh | bash 2>/dev/null", { silent: true });
+      }
+    }
+    if (hasCmd("rtk")) {
+      rtkPath = cmd("which rtk 2>/dev/null", { silent: true });
+      ok(`RTK installed successfully (${rtkPath})`);
+    } else {
+      err("RTK install failed — manual install: curl -fsSL https://rtk.ai/install.sh | bash");
+    }
+  }
+
+  // Ensure rtk is in context-mode startup PATH
+  if (rtkPath && rtkPath !== "/usr/bin/rtk" && !fs.existsSync("/usr/bin/rtk")) {
+    try {
+      fs.symlinkSync(rtkPath, "/usr/bin/rtk");
+      ok("RTK symlinked to /usr/bin/rtk (context-mode compat)");
+    } catch {
+      info("Could not symlink rtk to /usr/bin — may need sudo");
+    }
+  } else if (fs.existsSync("/usr/bin/rtk")) {
+    ok("RTK already at /usr/bin/rtk ✓");
   }
 
   // ─── Done ───

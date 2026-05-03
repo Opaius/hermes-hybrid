@@ -33,6 +33,8 @@ _SECURITY_ENABLED = os.getenv("MCP_VISIBILITY_SECURITY", "1") == "1"
 _TOON_ENABLED = os.getenv("MCP_VISIBILITY_TOON", "1") == "1"
 _CACHE_ENABLED = os.getenv("MCP_VISIBILITY_CACHE", "1") == "1"
 _SCHEMA_COMPACT = os.getenv("MCP_VISIBILITY_SCHEMA_COMPACT", "1") == "1"
+_RTK_ENABLED = os.getenv("MCP_VISIBILITY_RTK", "0") == "1"
+_RTK_PATH = os.getenv("MCP_VISIBILITY_RTK_PATH", "/root/.local/bin/rtk")
 
 _CACHE_DIR = Path(os.path.expanduser(
     os.getenv("MCP_VISIBILITY_CACHE_DIR", "~/.hermes/cache/mcp-visibility")
