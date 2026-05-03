@@ -1,0 +1,19 @@
+# tool_aliases.yaml — User-configurable MCP tool name aliases
+# Edit to customize how tools appear in chat/dashboard.
+# Format: clean_name: ugly_mcp_backend_name
+# Restart gateway after changing.
+
+aliases:
+  cp_terminal: "mcp_context_mode_ctx_execute"
+  cp_batch: "mcp_context_mode_ctx_batch_execute"
+  cp_search: "mcp_context_mode_ctx_search"
+  cp_index: "mcp_context_mode_ctx_index"
+  cp_fetch: "mcp_context_mode_ctx_fetch_and_index"
+  cp_stats: "mcp_context_mode_ctx_stats"
+  cp_doctor: "mcp_context_mode_ctx_doctor"
+  cp_upgrade: "mcp_context_mode_ctx_upgrade"
+  cp_purge: "mcp_context_mode_ctx_purge"
+  cp_insight: "mcp_context_mode_ctx_insight"
+  cp_exec_file: "mcp_context_mode_ctx_execute_file"
+  web_search: "mcp_searxng_searxng_web_search"
+  web_read: "mcp_searxng_web_url_read"
