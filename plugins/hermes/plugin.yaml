@@ -1,11 +1,14 @@
-name: mcp-visibility
-version: 1.2.2
-description: "MCP tool optimizer: security guardrails, schema compaction, TOON output, result caching. Hooks-only — no wrapper tools."
+name: hermes-hybrid
+version: 2.1.0
+description: "Hermes Agent + OpenCode token efficiency: smart formatting (md-table/YAML/truncation), unified security (hardline/approval/evasion), schema compaction, result caching, RTK wrapping. Dual plugin — Hermes + OpenCode. One npm install bundles context-mode + mcp-visibility + RTK."
 author: cioky
 kind: backend
-# No provides_tools — plugin only registers hooks, modifies native MCP tools in-place
 hooks:
+  on_session_start:
+    - _compact_native_tool_schemas
   pre_tool_call:
     - pre_tool_call_security
+  pre_llm_call:
+    - _compact_native_tool_schemas
   post_tool_call:
     - _post_tool_call_optimize

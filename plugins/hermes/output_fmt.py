@@ -115,10 +115,11 @@ def format_result(raw: str, tool_name: str = "") -> Tuple[str, dict]:
             formatted_bytes = len(result.encode("utf-8"))
             savings = round((1 - formatted_bytes / max(original_bytes, 1)) * 100)
             header = _make_header("toon", {"saved_pct": savings})
+            logger.info("mcp-visibility: %s", header)
             meta["fmt"] = "toon"
             meta["formatted_bytes"] = formatted_bytes
             meta["savings_pct"] = savings
-            return f"{header}\n{result}", meta
+            return result, meta  # No header in LLM context
         return raw, meta
 
     # ── Smart mode ──
@@ -146,12 +147,13 @@ def format_result(raw: str, tool_name: str = "") -> Tuple[str, dict]:
                     "cols": len(keys),
                     "saved_pct": savings,
                 })
+                logger.info("mcp-visibility: %s", header)
                 meta["fmt"] = "md-table"
                 meta["rows"] = len(parsed)
                 meta["cols"] = len(keys)
                 meta["formatted_bytes"] = formatted_bytes
                 meta["savings_pct"] = savings
-                return f"{header}\n{table}", meta
+                return table, meta  # No header in LLM context
             # Too many columns — fall through to YAML-ish or JSON
 
         # JSON dict → YAML
@@ -163,10 +165,11 @@ def format_result(raw: str, tool_name: str = "") -> Tuple[str, dict]:
                 formatted_bytes = len(yaml_str.encode("utf-8"))
                 savings = round((1 - formatted_bytes / max(original_bytes, 1)) * 100)
                 header = _make_header("yaml", {"saved_pct": savings})
+                logger.info("mcp-visibility: %s", header)
                 meta["fmt"] = "yaml"
                 meta["formatted_bytes"] = formatted_bytes
                 meta["savings_pct"] = savings
-                return f"{header}\n{yaml_str}", meta
+                return yaml_str, meta  # No header in LLM context
             except Exception:
                 return raw, meta  # YAML dump failed — passthrough
 
@@ -182,10 +185,11 @@ def format_result(raw: str, tool_name: str = "") -> Tuple[str, dict]:
                 formatted_bytes = len(text.encode("utf-8"))
                 savings = round((1 - formatted_bytes / max(original_bytes, 1)) * 100)
                 header = _make_header("markdown", {"saved_pct": savings})
+                logger.info("mcp-visibility: %s", header)
                 meta["fmt"] = "markdown"
                 meta["formatted_bytes"] = formatted_bytes
                 meta["savings_pct"] = savings
-                return f"{header}\n{text}", meta
+                return text, meta  # No header in LLM context
         except Exception:
             pass
         return raw, meta
@@ -203,12 +207,13 @@ def format_result(raw: str, tool_name: str = "") -> Tuple[str, dict]:
             "rows": TRUNCATE_LINES,
             "saved_pct": savings,
         })
+        logger.info("mcp-visibility: %s", header)
         meta["fmt"] = "truncated"
         meta["formatted_bytes"] = formatted_bytes
         meta["savings_pct"] = savings
         meta["total_lines"] = len(lines)
         meta["omitted"] = leftover
-        return f"{header}\n{result}", meta
+        return result, meta  # No header in LLM context
 
     # Everything else → passthrough
     return raw, meta
