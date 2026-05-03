@@ -1,17 +1,20 @@
 """
-hermes-hybrid — Hermes Agent plugin for MCP tool optimization.
+hermes-hybrid v2.2 — Hermes Agent plugin for MCP tool optimization.
 
 Bundles context-mode + mcp-visibility + RTK for Hermes Agent.
 One npm install: npm i -g hermes-hybrid && hermes-hybrid setup.
 
-Hooks-only architecture: modifies native MCP tools in-place.
-Works WITH or WITHOUT context-mode MCP server installed.
+Architecture (hooks-only, no handler monkey-patching):
+  register(ctx):
+    pre_tool_call        → security (blocks dangerous ctx_execute shell commands)
+    pre_llm_call         → schema compaction (compact MCP tool descriptions in-place)
+    transform_tool_result → smart formatting + caching for ALL tool results (incl. MCP)
 
-Architecture:
-  register(ctx) → registers 3 hooks
-  pre_tool_call hook → terminal whitelist + ctx_execute security
-  pre_llm_call hook (one-shot) → compacts native MCP tool descriptions + handler swap (ALL tools)
-  post_tool_call hook → formatting cache fallback (formatted if handler swap missed)
+Why transform_tool_result:
+  - Fires for EVERY tool call in handle_function_call (model_tools.py:762)
+  - Works for MCP tools where post_tool_call does NOT fire
+  - Receives original result → returns formatted string to replace it
+  - Built-in Hermes Agent v0.11.0+ hook (tests/test_transform_tool_result_hook.py)
 """
 from __future__ import annotations
 
@@ -36,62 +39,17 @@ from .mcp_visibility import (
     pre_tool_call_security,
 )
 
-# Import new modules
+# Import formatting engine
 try:
     from .output_fmt import optimize as _optimize_result
 except ImportError:
     _optimize_result = _toon_convert  # fallback to TOON
 
 
-# Tools that get security checks in handler swap (shell exec)
-_SHELL_SECURITY_TOOLS = {"mcp_context_mode_ctx_execute", "mcp_context_mode_ctx_batch_execute"}
-
-# All tools whose handlers are swapped (set dynamically after swap)
-_SWAPPED_TOOLS = set()
-
-
-def _post_tool_call_optimize(
-    tool_name: str, args: dict, result: str, **kwargs
-) -> str:
-    """post_tool_call hook: formatting + cache fallback for MCP tools not covered by handler swap.
-    
-    NOTE: Hermes gateway may not invoke post_tool_call for MCP tools.
-    All formatting is handled by the handler swap in _compact_native_tool_schemas.
-    This hook is the safety net.
-    """
-    if not tool_name.startswith("mcp_"):
-        return result
-    logger.info("mcp-visibility: post_tool_call fired for %s", tool_name)
-    if tool_name in _SWAPPED_TOOLS:
-        return result  # Already formatted + cached by handler swap
-    stripped = result.strip() if isinstance(result, str) else ""
-    if not stripped:
-        return result
-    try:
-        cache_hit = _cache_get(tool_name, args)
-        if cache_hit:
-            logger.debug("mcp-visibility: post_tool_call cache hit for %s", tool_name)
-            return cache_hit
-        optimized = _optimize_result(stripped, tool_name)
-        if optimized != stripped:
-            orig_bytes = len(stripped.encode("utf-8"))
-            opt_bytes = len(optimized.encode("utf-8"))
-            saved = round((1 - opt_bytes / max(orig_bytes, 1)) * 100)
-            logger.info(
-                "mcp-visibility: post_tool_call formatted %s (%d→%d bytes, %d%% saved)",
-                tool_name, orig_bytes, opt_bytes, saved,
-            )
-        _cache_set(tool_name, args, optimized)
-        return optimized
-    except Exception:
-        return result
-
-
-# ── One-shot pre_llm_call hook: compact native MCP tool descriptions ──
+# ── Schema compaction: compact native MCP tool descriptions ──
 
 _COMPACT_DONE = False
 
-# Map native MCP tool names → compact descriptions
 _NATIVE_COMPACT_MAP = {
     "mcp_context_mode_ctx_execute": (
         "Execute code in sandboxed subprocess. Only stdout enters context. "
@@ -128,7 +86,6 @@ _NATIVE_COMPACT_MAP = {
     "mcp_context_mode_ctx_execute_file": (
         "Read and process a file in sandboxed subprocess."
     ),
-    # searxng
     "mcp_searxng_searxng_web_search": (
         "Web search via SearXNG. Returns title, URL, description for each result."
     ),
@@ -138,15 +95,14 @@ _NATIVE_COMPACT_MAP = {
 }
 
 
-def _compact_native_tool_schemas(**kwargs) -> None:
+def _compact_schemas_pre_llm(**kwargs) -> None:
     """
-    pre_llm_call hook (one-shot): compact native MCP tool descriptions in-place,
-    then wrap ALL MCP tool handlers with formatting/caching (and security for shell tools).
+    pre_llm_call hook (one-shot): compact native MCP tool descriptions in-place.
 
-    Gracefully skips tools that aren't registered (e.g. context-mode not installed).
+    Modifies registry entries directly — no handler swap needed.
+    Returns None (observational hook — side effects only).
     """
     global _COMPACT_DONE
-    logger.info("mcp-visibility: compaction hook called (COMPACT_DONE=%s)", _COMPACT_DONE)
     if _COMPACT_DONE:
         return
 
@@ -158,7 +114,6 @@ def _compact_native_tool_schemas(**kwargs) -> None:
         return
 
     try:
-        # ── Phase 1: Compact descriptions ──
         compacted = 0
         for native_name, compact_desc in _NATIVE_COMPACT_MAP.items():
             entry = registry.get_entry(native_name)
@@ -172,183 +127,103 @@ def _compact_native_tool_schemas(**kwargs) -> None:
                 "mcp-visibility: compacted %d native MCP tool descriptions",
                 compacted,
             )
-
-        # ── Phase 2: Handler swap — ALL tools ──
-        # Shared format+cache post-execution logic
-        def _format_and_cache(result, tool_name, args):
-            """Apply smart formatting + cache. Returns formatted result."""
-            fmt = _optimize_result
-            _set = _cache_set
-            if not fmt:
-                return result
-            try:
-                result_str = str(result)
-                try:
-                    parsed = json.loads(result_str)
-                    if isinstance(parsed, dict) and "result" in parsed and isinstance(parsed["result"], str):
-                        inner = parsed["result"]
-                        formatted_inner = fmt(inner, tool_name)
-                        if formatted_inner != inner:
-                            orig_bytes = len(inner.encode("utf-8"))
-                            opt_bytes = len(formatted_inner.encode("utf-8"))
-                            saved = round((1 - opt_bytes / max(orig_bytes, 1)) * 100)
-                            logger.info(
-                                "mcp-visibility: handler-swap formatted %s (%d→%d bytes, %d%% saved)",
-                                tool_name, orig_bytes, opt_bytes, saved,
-                            )
-                        parsed["result"] = formatted_inner
-                        result = json.dumps(parsed, ensure_ascii=False)
-                    else:
-                        formatted = fmt(result_str, tool_name)
-                        if formatted != result_str:
-                            logger.info("mcp-visibility: handler-swap formatted %s", tool_name)
-                        result = formatted
-                except Exception:
-                    result = fmt(result_str, tool_name)
-            except Exception:
-                pass
-            if _set:
-                try:
-                    _set(tool_name, args, str(result))
-                except Exception:
-                    pass
-            return result
-
-        def _make_secure_handler(orig, tool_name):
-            """Security check + RTK wrap + format + cache for shell exec tools."""
-            _get = _cache_get
-
-            def secure_handler(args, **kw):
-                inner = args.get("arguments", args)
-                language = inner.get("language", "")
-                code = inner.get("code", "")
-
-                # Pre-execution: security check
-                if language == "shell" and code:
-                    try:
-                        from .security import check_all_command_guards
-                        result = check_all_command_guards(code, "local")
-                        if not result.get("approved"):
-                            if result.get("status") == "approval_required":
-                                return json.dumps({
-                                    "output": "", "exit_code": -1,
-                                    "error": result.get("message", "Waiting for user approval"),
-                                    "status": "approval_required",
-                                    "command": code,
-                                    "description": result.get("description", "command flagged"),
-                                    "pattern_key": result.get("pattern_key", ""),
-                                }, ensure_ascii=False)
-                            return json.dumps({
-                                "output": "", "exit_code": -1,
-                                "error": result.get("message", "Command blocked"),
-                                "status": "blocked",
-                            }, ensure_ascii=False)
-                    except ImportError:
-                        pass
-
-                # RTK wrapping: prepend rtk to shell commands for token savings
-                if language == "shell" and code and _RTK_ENABLED:
-                    try:
-                        wrapped = f"{_RTK_PATH} -- {code}"
-                        if "code" in inner:
-                            inner["code"] = wrapped
-                        if "code" in args:
-                            args["code"] = wrapped
-                        logger.debug("mcp-visibility: rtk wrapping active — %s → %s", code[:60], wrapped[:60])
-                    except Exception:
-                        pass
-
-                # Cache check
-                cached = _get(tool_name, args) if _get else None
-                if cached:
-                    return cached
-
-                # Execute via original handler
-                result = orig(args, **kw)
-
-                # Post-execution: smart formatting + cache
-                return _format_and_cache(result, tool_name, args)
-
-            return secure_handler
-
-        def _make_format_handler(orig, tool_name):
-            """Format-only handler — no security. For read-only/search/fetch MCP tools."""
-            _get = _cache_get
-
-            def format_handler(args, **kw):
-                cached = _get(tool_name, args) if _get else None
-                if cached:
-                    return cached
-                result = orig(args, **kw)
-                return _format_and_cache(result, tool_name, args)
-
-            return format_handler
-
-        swapped = 0
-        secured = 0
-        formatted = 0
-        for native_name in _NATIVE_COMPACT_MAP:
-            entry = registry.get_entry(native_name)
-            if entry is None:
-                continue
-            original_handler = entry.handler
-
-            if native_name in _SHELL_SECURITY_TOOLS:
-                entry.handler = _make_secure_handler(original_handler, native_name)
-                secured += 1
-            else:
-                entry.handler = _make_format_handler(original_handler, native_name)
-                formatted += 1
-            swapped += 1
-
-        # Update _SWAPPED_TOOLS so post_tool_call knows which to skip
-        global _SWAPPED_TOOLS
-        _SWAPPED_TOOLS = {
-            name for name in _NATIVE_COMPACT_MAP
-            if registry.get_entry(name) is not None
-        }
-
-        if swapped:
-            logger.info(
-                "mcp-visibility: swapped %d MCP tool handlers (%d with security, %d format-only)",
-                swapped, secured, formatted,
-            )
     except Exception as e:
         logger.warning("mcp-visibility: schema compaction failed: %s", e)
     finally:
         _COMPACT_DONE = True
 
 
-def register(ctx) -> None:
-    """Register hooks. Always registers pre_tool_call for terminal whitelist + ctx_execute security."""
-    tools = _discover_all_tools()
-    tool_count = len(tools)
+# ── transform_tool_result: smart formatting + caching for all tools ──
 
-    # Always register pre_tool_call — handles terminal whitelist AND ctx_execute security
+def _transform_tool_result(
+    tool_name: str = "",
+    args: dict = None,
+    result: str = "",
+    task_id: str = "",
+    session_id: str = "",
+    tool_call_id: str = "",
+    duration_ms: int = 0,
+    **kwargs,
+) -> str | None:
+    """
+    transform_tool_result hook: format + cache MCP tool results.
+
+    Fires for EVERY tool call (handle_function_call, model_tools.py:762).
+    Works where post_tool_call doesn't (MCP tools bypass post_tool_call).
+
+    Args:
+        tool_name: Full tool name (e.g. "mcp_context_mode_ctx_execute")
+        args: Tool arguments dict
+        result: Raw result string (JSON or plain text)
+        duration_ms: Tool execution time in ms
+
+    Returns:
+        Formatted string to replace the result, or None to keep original.
+        First non-None string return from any hook wins (model_tools.py:771-774).
+    """
+    # Only format MCP tool results
+    if not tool_name.startswith("mcp_"):
+        return None
+
+    if not result or not isinstance(result, str):
+        return None
+
+    stripped = result.strip()
+    if not stripped:
+        return None
+
+    try:
+        # Check cache
+        cached = _cache_get(tool_name, args or {})
+        if cached:
+            logger.debug("mcp-visibility: cache hit for %s", tool_name)
+            return cached
+
+        # Apply smart formatting
+        optimized = _optimize_result(stripped, tool_name)
+
+        if optimized != stripped:
+            orig_bytes = len(stripped.encode("utf-8"))
+            opt_bytes = len(optimized.encode("utf-8"))
+            saved = round((1 - opt_bytes / max(orig_bytes, 1)) * 100)
+            logger.info(
+                "mcp-visibility: transform_tool_result formatted %s (%d→%d bytes, %d%% saved)",
+                tool_name, orig_bytes, opt_bytes, saved,
+            )
+
+        # Cache the result
+        _cache_set(tool_name, args or {}, optimized)
+
+        return optimized
+    except Exception as e:
+        logger.debug("mcp-visibility: transform_tool_result failed for %s: %s", tool_name, e)
+        return None
+
+
+# ── Plugin entry point ──
+
+def register(ctx) -> None:
+    """Register hooks. No handler swap — native Hermes hooks only."""
+
+    # pre_tool_call: security for ctx_execute shell commands
     try:
         ctx.register_hook("pre_tool_call", pre_tool_call_security)
-        logger.info("mcp-visibility: registered pre_tool_call security hook (terminal+ctx)")
+        logger.info("mcp-visibility: registered pre_tool_call security hook")
     except Exception as e:
         logger.warning("mcp-visibility: pre_tool_call hook failed: %s", e)
 
-    # One-shot hook: compact native MCP descriptions + handler swap for ALL tools
-    # Uses on_session_start to guarantee it fires on every new conversation,
-    # not just the first LLM turn (which may have been consumed by a stale plugin).
+    # pre_llm_call: compact MCP tool descriptions (one-shot, in-place)
     try:
-        ctx.register_hook("on_session_start", _compact_native_tool_schemas)
-        ctx.register_hook("pre_llm_call", _compact_native_tool_schemas)
-        logger.info(
-            "mcp-visibility: registered pre_llm_call + on_session_start schema compaction hooks (%d tools)",
-            tool_count,
-        )
+        ctx.register_hook("pre_llm_call", _compact_schemas_pre_llm)
+        logger.info("mcp-visibility: registered pre_llm_call schema compaction hook")
     except Exception as e:
-        logger.debug("mcp-visibility: schema compaction hooks skipped: %s", e)
+        logger.warning("mcp-visibility: pre_llm_call hook failed: %s", e)
 
-    # Post-tool-call hook: safety net for MCP tools not covered by handler swap
+    # transform_tool_result: smart formatting + caching for ALL tools
     try:
-        ctx.register_hook("post_tool_call", _post_tool_call_optimize)
-        logger.info("mcp-visibility: registered post_tool_call optimization hook")
+        ctx.register_hook("transform_tool_result", _transform_tool_result)
+        logger.info("mcp-visibility: registered transform_tool_result formatting hook")
     except Exception as e:
-        logger.debug("mcp-visibility: post_tool_call hook skipped: %s", e)
+        logger.warning("mcp-visibility: transform_tool_result hook failed: %s", e)
 
-    logger.info("mcp-visibility: ready — %d tools discovered, guardrails active", tool_count)
+    logger.info("mcp-visibility: ready — hooks registered")
