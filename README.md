@@ -1,157 +1,193 @@
-<p align="center">
-  <img src="https://img.shields.io/npm/v/hermes-hybrid?color=blue" alt="npm">
-  <img src="https://img.shields.io/badge/platform-Hermes%20%7C%20OpenCode-purple" alt="platforms">
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
-</p>
+# hermes-hybrid v2.5.0
 
-# hermes-hybrid
+**One setup. Full token efficiency stack. No npm publication needed.**
 
-**One install. Three battle-tested tools. Zero token waste.**
+AI agents should follow this README to self-install. Every component is composable
+through `--flags` and JSON output. The agent reads `action` fields in responses
+to decide next steps.
 
-`hermes-hybrid` bundles the best toolchain for Hermes Agent and OpenCode into a single npm package — context-mode sandboxed execution, smart output formatting, security guardrails, and RTK command rewriting.
+## Quick Start (AI Agent — Self-Install)
 
-<p align="center">
-  <b>npm i -g hermes-hybrid && hermes-hybrid setup</b>
-</p>
-
----
-
-## What's Inside
-
-| Component | What It Does | Token Savings | Author |
-|-----------|-------------|---------------|--------|
-| **[context-mode](https://github.com/mksglu/context-mode)** | Sandboxed multi-language execution (JS/TS/Python/Go/Rust). Raw data stays out of context. BM25-indexed output search. | ~98% context reduction | [@mksglu](https://github.com/mksglu) |
-| **[rtk](https://github.com/rtk-ai/rtk)** | Shell command rewriting proxy. `git diff` → `rtk diff`. 60-90% smaller output. | 60–90% | [rtk-ai](https://github.com/rtk-ai) |
-| **[mcp-visibility](https://github.com/Opaius/hermes-mcp-visibility)** | Smart formatting (md-table/YAML/truncation), security guardrails, result caching. Dual plugin for Hermes + OpenCode. | 20–60% per call | [@cioky](https://github.com/Opaius) |
-
-## Quick Start
-
-```bash
-# Install
-npm i -g hermes-hybrid
-
-# Auto-configure
-hermes-hybrid setup
-
-# Verify
-hermes-hybrid doctor
-
-# Start context-mode server
-hermes-hybrid serve
 ```
+# 1. Clone the repo
+git clone https://github.com/Opaius/hermes-hybrid.git /opt/hermes-workspace/hermes-hybrid
 
-Restart Hermes after setup:
-```bash
-hermes gateway restart
-```
+# 2. Install system dependencies (one-time)
+bun --version || curl -fsSL https://bun.sh/install | bash
+pip install scrapling[all] && scrapling install
 
-## CLI Reference
+# 3. Start SearXNG (private search — no Tor, Webshare proxy)
+cd /opt/hermes-workspace/hermes-hybrid
+mkdir -p searxng && chmod 777 searxng
+export SEARXNG_SECRET=$(openssl rand -hex 32)
+docker compose -f docker-compose.searxng.yml up -d
+# SearXNG at http://localhost:3211
 
-```bash
-hermes-hybrid setup      # Auto-detect Hermes + OpenCode, install plugins, configure MCP
-hermes-hybrid serve      # Start context-mode MCP server
-hermes-hybrid doctor     # Health check all integrations
-hermes-hybrid status     # Show env vars + versions
-hermes-hybrid remove     # Clean uninstall everything
-hermes-hybrid env        # Print env var reference
+# 4. Configure Hermes Agent
+# Add to ~/.hermes/config.yaml:
+#   plugins:
+#     enabled:
+#       - hermes-hybrid
+#   mcp_servers:
+#     searxng:
+#       command: bunx
+#       args: ["mcp-searxng"]
+#       env:
+#         SEARXNG_URL: "http://localhost:3211"
 
-# Alias
-hh setup
-```
+# 5. Install the plugin
+cp -r /opt/hermes-workspace/hermes-hybrid/plugins/hermes ~/.hermes/plugins/hermes-hybrid/
 
-## Configuration
+# 6. Start context-mode MCP server (Hermes config must reference this)
+#    Add to ~/.hermes/config.yaml mcp_servers:
+#      context-mode:
+#        command: bunx
+#        args: ["context-mode"]
 
-**Granular kill switches. Disable only what you don't need.**
-
-```bash
-# In ~/.hermes/.env or export before running
-
-HH_SERVER=0            # Disable context-mode MCP server
-HH_VISIBILITY=0        # Disable all mcp-visibility features
-HH_FMT=passthrough     # No formatting (smart | toon | passthrough)
-HH_SECURITY=0          # No command security checks
-HH_CACHE=0             # No result caching
-HH_COMPACT=0           # No schema compaction
-HH_SANDBOX=bun         # Runtime: bun | deno | node
-HH_TRUNCATE=100        # Lines before truncation
-```
-
-**Example:** want context-mode but no visibility?
-
-```bash
-export HH_VISIBILITY=0
-hermes-hybrid serve
-```
-
-**Example:** want visibility formatting but no security blocking?
-
-```bash
-export HH_SECURITY=0
-hermes gateway restart
+# 7. Restart WebUI
+systemctl restart hermes-webui
+# or: hermes-hybrid restart
 ```
 
 ## What Gets Installed
 
-| Target | Path | Purpose |
-|--------|------|---------|
-| Hermes plugin | `~/.hermes/plugins/mcp-visibility/` | Formatting, security, cache for ctx_execute |
-| OpenCode plugin | `~/.config/opencode/plugins/mcp-visibility.ts` | Formatting + cache for OpenCode |
-| Hermes config | `~/.hermes/config.yaml` | MCP server entries, hooks |
-| context-mode | via `bunx context-mode` | Sandboxed execution server |
+| Component | Path | Purpose |
+|-----------|------|---------|
+| Hermes plugin | `~/.hermes/plugins/hermes-hybrid/` | Formatting, security, cache, tool aliasing, RTK compression, file cache, skill injection |
+| scrapling-fetch.py | `scripts/scrapling-fetch.py` | Web fetcher — Chrome impersonation, proxy, CSS extraction, StealthyFetcher |
+| SearXNG Docker | `docker-compose.searxng.yml` | Private metasearch — no Tor, Webshare proxy, Redis cache |
+| context-mode | via `bunx context-mode` | Sandboxed execution, BM25-indexed output |
+| Scrapling Python | via `pip install scrapling[all]` | HTTP + headless browser fetching |
 
-## Architecture
+## Composable Pipeline
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  Hermes Agent                     │
-│                                                   │
-│  ┌──────────┐  ┌──────────┐  ┌───────────────┐  │
-│  │ ctx_exec │  │ security │  │ output_fmt    │  │
-│  │ (sandbox)│──│ (guard)  │──│ (md-table/    │  │
-│  │          │  │          │  │  YAML/trunc)  │  │
-│  └──────────┘  └──────────┘  └───────────────┘  │
-│       │                            │              │
-│       ▼                            ▼              │
-│  context-mode                 mcp-visibility      │
-│  MCP server                   plugin              │
-│       │                            │              │
-│       ▼                            ▼              │
-│  ┌──────────────────────────────────────┐        │
-│  │            LLM Context                │        │
-│  │    (formatted, truncated, indexed)    │        │
-│  └──────────────────────────────────────┘        │
-│                                                   │
-│  Terminal commands: rtk rewrite → 60-90% savings  │
-└─────────────────────────────────────────────────┘
+                      ┌─────────────────────┐
+                      │   Need web data?     │
+                      └─────────┬───────────┘
+                                │
+                  ┌─────────────┼──────────────┐
+                  ▼             ▼              ▼
+              SEARCH        FETCH URL      SCREENSHOT
+         SearXNG MCP    ctx_fetch_and_*  vision_analyze
+                                │
+                  ┌─────────────┼──────────────┐
+                  ▼             ▼              ▼
+              SIMPLE         FAILED?        CUSTOM
+         ctx_fetch_and_   scrapling-fetch   ctx_execute
+         index (BM25)         .py         python code
+                                │
+                          ctx_index + ctx_search
 ```
 
-## Manual Install (no npm)
+## scrapling-fetch.py — All Flags
 
-```bash
-# Clone and run setup
-git clone https://github.com/Opaius/hermes-hybrid.git
-cd hermes-hybrid
-node bin/cli.js setup
-```
+Every flag is composable. The script outputs structured JSON with an `action` field
+telling the agent what to do next.
+
+| Flag | Default | What it does |
+|------|---------|-------------|
+| `--url URL` | *(required)* | Target URL |
+| `--stealth` | off | StealthyFetcher: Playwright browser, JS render, Cloudflare bypass |
+| `--select "css"` | "" | CSS selector extraction (e.g. `article p,h2`) |
+| `--raw` | off | Raw HTML output (no markdown conversion) |
+| `--text-only` | off | Strip ALL tags, plain text only |
+| `--extract-links` | off | Extract all `<a href>` links |
+| `--max-links N` | 100 | Max links to extract |
+| `--compact` | off | No content in JSON → agent MUST call `ctx_index` |
+| `--index-source "label"` | "" | Sets action: `call_ctx_index` or `optional_ctx_index` |
+| `--output-file /tmp/x.md` | "" | Write content to file |
+| `--timeout N` | 30 | Request timeout seconds |
+| `--impersonate` | chrome_131 | Browser impersonation: chrome_131, firefox_133, safari_18 |
+| `--proxy "url"` | Webshare | Custom proxy. `none` disables proxy. |
+| `--no-proxy` | off | Disable proxy entirely |
+| `--headers "K:V"` | [] | Extra HTTP headers (repeatable) |
+| `--no-headless` | off | Show browser window in stealth mode (debug) |
+| `--no-network-idle` | off | Don't wait for network idle in stealth mode |
+| `--help` | — | Full usage with examples |
+
+### Output `action` field
+
+| Value | Meaning |
+|-------|---------|
+| `call_ctx_index` | Compact mode. Agent MUST call `ctx_index(content=<content>, source=<index_source>)` |
+| `optional_ctx_index` | Full mode. Content in JSON. Agent can optionally `ctx_index` for BM25 search |
+| `content_in_context` | No `--index-source` set. Content in JSON, no index hint |
+| `use_cli_fallback` | Python API failed. Agent should use `scrapling extract get ...` CLI |
+| `try_ctx_fetch_and_index` | All failed. Agent should use `ctx_fetch_and_index` as last resort |
+
+## Plugin Architecture (v2.5)
+
+The Hermes plugin uses **four native Hermes Agent hooks** — zero monkey-patching:
+
+| Hook | When | Purpose |
+|------|------|---------|
+| `on_session_start` | New session | Register clean tool aliases from `tool_aliases.yaml` |
+| `pre_tool_call` | Before any tool | Security: block dangerous ctx_execute shell commands |
+| `pre_llm_call` | Before every LLM turn | Schema compaction + auto-inject web-fetch skill on first turn |
+| `transform_tool_result` | After every tool | 4-stage pipeline: file_cache → rtk_compress → output_fmt → result_cache |
+
+**`transform_tool_result` pipeline:**
+
+1. **File read caching** — Unchanged file re-reads return ~30-token stub (lean-ctx style)
+2. **RTK compression** — Strip ANSI, collapse blanks, remove noise from shell output
+3. **Output formatting** — md-table/csv/truncation/compressed-JSON (output_fmt.py)
+4. **Result caching** — Hash-keyed cache with TTL per tool type
+
+## Env Var Kill Switches
+
+| Var | Effect | Default |
+|-----|--------|---------|
+| `HH_RTK_COMPRESS=0` | Disable RTK shell output compression | 1 |
+| `HH_FILE_CACHE=0` | Disable file read caching | 1 |
+| `HH_FILE_CACHE_MAX=N` | Max cached file entries (LRU) | 500 |
+| `MCP_VISIBILITY_SECURITY=0` | Disable shell command blocking | 1 |
+| `MCP_VISIBILITY_FMT=passthrough` | No output formatting | smart |
+| `MCP_VISIBILITY_CACHE=0` | No result caching | 1 |
+| `MCP_VISIBILITY_SCHEMA_COMPACT=0` | No MCP schema compaction | 1 |
+
+Set in `~/.hermes/.env` or export before running.
 
 ## Requirements
 
-- **Hermes Agent** (for Hermes plugin)
-- **OpenCode** (for OpenCode plugin)
-- **bun** or **node** ≥18 (for context-mode server)
-- **rtk** CLI (optional, for command rewriting)
-- **Python 3.11+** (for Hermes plugin — format/security modules)
+- **Hermes Agent** — plugin host
+- **bun** ≥ 1.0 — for context-mode MCP server
+- **Python 3.11+** — for plugin + scrapling-fetch.py
+- **Scrapling** — `pip install scrapling[all] && scrapling install`
+- **Docker** — for SearXNG
+- **Webshare account** — for rotating proxy ($2.99/mo, 250GB)
+
+## Docker Compose (SearXNG)
+
+```bash
+cd hermes-hybrid
+mkdir -p searxng && chmod 777 searxng
+export SEARXNG_SECRET=$(openssl rand -hex 32)
+docker compose -f docker-compose.searxng.yml up -d
+```
+
+Services: SearXNG (port 3211) + Redis (cache). No Tor, no Whoogle. Proxy via Webshare.
+
+## Verification
+
+```bash
+# 1. SearXNG health
+curl http://localhost:3211/healthz
+
+# 2. Scrapling fetch
+python3 scripts/scrapling-fetch.py --url https://httpbin.org/html --select h1
+# Must return JSON with status: ok, title: "Herman Melville - Moby-Dick"
+
+# 3. Full pipeline
+python3 scripts/scrapling-fetch.py --url https://httpbin.org/html --compact --index-source test 2>/dev/null
+# Must return action: call_ctx_index
+# Then: ctx_index(content=<markdown>, source="test") → ctx_search(queries=["Moby"], source="test")
+
+# 4. Plugin loaded
+grep "mcp-visibility: ready" ~/.hermes/logs/agent.log | tail -1
+# Must show: mcp-visibility: ready — hooks registered
+```
 
 ## License
 
 MIT © [cioky](https://github.com/cioky)
-
----
-
-### Acknowledgments
-
-This project stands on the shoulders of:
-
-- **[context-mode](https://github.com/mksglu/context-mode)** by [@mksglu](https://github.com/mksglu) — The MCP server that makes sandboxed execution possible. Without it, every `ls`, `git diff`, and `curl` would flood your context window.
-- **[rtk](https://github.com/rtk-ai/rtk)** by [rtk-ai](https://github.com/rtk-ai) — The CLI proxy that rewrites shell commands for 60-90% token reduction. The silent workhorse behind every shell call.
-- **[hermes-mcp-visibility](https://github.com/Opaius/hermes-mcp-visibility)** — Smart formatting, security, and caching layer that makes raw tool output LLM-readable.

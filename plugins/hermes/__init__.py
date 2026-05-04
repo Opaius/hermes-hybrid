@@ -1,5 +1,5 @@
 """
-hermes-hybrid v2.3 — Hermes Agent plugin for MCP tool optimization.
+hermes-hybrid v2.5 — Hermes Agent plugin for MCP tool optimization.
 
 Bundles context-mode + mcp-visibility + RTK for Hermes Agent.
 One npm install: npm i -g hermes-hybrid && hermes-hybrid setup.
@@ -9,7 +9,13 @@ Architecture (hooks-only, no handler monkey-patching):
     on_session_start      → register clean tool aliases from tool_aliases.yaml
     pre_tool_call         → security (blocks dangerous ctx_execute shell commands)
     pre_llm_call          → schema compaction (compact MCP tool descriptions in-place)
-    transform_tool_result → smart formatting + caching for ALL tool results (incl. MCP)
+    transform_tool_result → file_cache → rtk_compress → output_fmt → result_cache
+
+transform_tool_result pipeline:
+  1. File read caching — if file unchanged since last read, return ~30-token stub (lean-ctx style)
+  2. RTK compression — strip ANSI, collapse blanks, remove noise from shell output
+  3. Output formatting — md-table/YAML/truncation/compressed-JSON (output_fmt.py)
+  4. Result caching — hash-keyed cache with TTL per tool type
 
 Tool Aliasing:
   Users configure tool_aliases.yaml: { clean_name: ugly_mcp_backend_name }
@@ -36,6 +42,10 @@ from .mcp_visibility import (
     _cache_set,
     _RTK_ENABLED,
     _RTK_PATH,
+    _RTK_COMPRESS_ENABLED,
+    _FILE_CACHE_ENABLED,
+    _rtk_compress_result,
+    _file_cache_check,
     SHELL_EXEC_TOOLS,
     TOOL_ALIASES,
     TOOL_EMOJIS,
@@ -242,6 +252,7 @@ def _transform_tool_result(
     """
     transform_tool_result hook: format + cache MCP tool results.
 
+    Pipeline: file_cache → rtk_compress → output_fmt → result_cache
     Also handles alias tools — resolves clean_name back to mcp_ name for caching.
     """
     # Resolve alias → original for lookup
@@ -259,13 +270,33 @@ def _transform_tool_result(
         return None
 
     try:
-        # Cache under original MCP name (aliases share cache)
+        # ── File read caching (lean-ctx style) ──
+        file_stub = _file_cache_check(actual_tool, args or {}, stripped)
+        if file_stub:
+            display_name = _ALIAS_REVERSE.get(actual_tool, actual_tool)
+            logger.info("mcp-visibility: file cache hit %s", display_name)
+            return file_stub
+
+        # ── RTK-style post-execution compression ──
+        rtk_compressed, rtk_changed = _rtk_compress_result(actual_tool, args or {}, stripped)
+        if rtk_changed:
+            orig_len = len(stripped)
+            stripped = rtk_compressed
+            display_name = _ALIAS_REVERSE.get(actual_tool, actual_tool)
+            logger.info(
+                "mcp-visibility: rtk compressed %s (%d→%d bytes, %d%% saved)",
+                display_name, orig_len, len(stripped),
+                round((1 - len(stripped) / max(orig_len, 1)) * 100),
+            )
+
+        # ── Result cache check ──
         cache_name = actual_tool
         cached = _cache_get(cache_name, args or {})
         if cached:
             logger.debug("mcp-visibility: cache hit for %s (via %s)", cache_name, tool_name)
             return cached
 
+        # ── Output formatting (md-table/YAML/truncation) ──
         optimized = _optimize_result(stripped, actual_tool)
 
         if optimized != stripped:

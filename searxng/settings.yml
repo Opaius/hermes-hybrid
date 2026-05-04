@@ -1,0 +1,79 @@
+# SearXNG configuration for hermes-hybrid
+# Copy to: docker-compose.searxng.yml's mounted ./searxng/ directory
+#
+# This disables Tor proxy and uses direct Webshare rotating gateway.
+# Place alongside docker-compose.searxng.yml as ./searxng/settings.yml
+
+use_default_settings: true
+
+general:
+  instance_name: "Agency Search"
+  enable_metrics: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  ban_time_on_fail: 3
+  max_ban_time_on_fail: 30
+  formats:
+    - html
+    - json
+
+server:
+  port: 8080
+  bind_address: "0.0.0.0"
+  secret_key: "${SEARXNG_SECRET_KEY}"
+  limiter: false
+  image_proxy: false
+  public_instance: false
+
+valkey:
+  url: valkey://redis:6379/0
+
+ui:
+  default_locale: "en"
+  default_theme: simple
+  theme_args:
+    simple_style: dark
+  infinite_scroll: false
+  query_in_title: false
+
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 20.0
+  pool_connections: 100
+  pool_maxsize: 30
+  enable_http2: true
+  retries: 3
+  using_tor_proxy: false
+
+  # Configure your proxy below. Example: Webshare rotating gateway
+  # ($2.99/mo, 250GB, 10-proxy pool). Replace USER:PASS with your credentials.
+  # If you don't have a proxy, comment out this entire section.
+  proxies:
+    all://:
+      - http://USERNAME:PASSWORD@p.webshare.io:80
+
+engines:
+  # Keep only fast, reliable engines
+  - name: duckduckgo
+    disabled: false
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: qwant
+    disabled: false
+  - name: startpage
+    disabled: false
+  - name: wikipedia
+    disabled: false
+  - name: reddit
+    disabled: false
+  - name: github
+    disabled: false
+  - name: stackoverflow
+    disabled: false

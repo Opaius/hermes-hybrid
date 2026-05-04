@@ -10,6 +10,7 @@
  *   hermes-hybrid serve      Start context-mode MCP server
  *   hermes-hybrid doctor     Health check all integrations
  *   hermes-hybrid status     Show what's running, enabled, versions
+ *   hermes-hybrid restart    Restart Hermes WebUI (reload plugins)
  *   hermes-hybrid remove     Clean uninstall
  *   hermes-hybrid env        Print current env vars + effects
  */
@@ -33,7 +34,7 @@ const NC = "\x1b[0m";
 
 const BANNER = `
 ${CYAN}╔══════════════════════════════════════════╗
-║   hermes-hybrid v1.0.0                    ║
+║   hermes-hybrid v2.5.0                    ║
 ║   Token efficiency for Hermes + OpenCode  ║
 ╚══════════════════════════════════════════╝${NC}
 `;
@@ -77,23 +78,22 @@ function setup() {
 
   // Hermes plugin
   if (hermesInstalled) {
-    const hermesPluginDir = path.join(HERMES_HOME, "plugins", "mcp-visibility");
+    const hermesPluginDir = path.join(HERMES_HOME, "plugins", "hermes-hybrid");
     fs.mkdirSync(hermesPluginDir, { recursive: true });
-    const hermesFiles = ["__init__.py", "mcp_visibility.py", "security.py", "output_fmt.py", "plugin.yaml"];
+    const hermesFiles = ["__init__.py", "mcp_visibility.py", "security.py", "output_fmt.py", "plugin.yaml", "tool_aliases.yaml"];
     for (const f of hermesFiles) {
       fs.copyFileSync(path.join(PKG_DIR, "plugins", "hermes", f), path.join(hermesPluginDir, f));
     }
-    ok("Hermes mcp-visibility plugin → ~/.hermes/plugins/mcp-visibility/");
+    ok("Hermes hermes-hybrid plugin → ~/.hermes/plugins/hermes-hybrid/");
     
     // Add to config.yaml if not already there
     const configPath = path.join(HERMES_HOME, "config.yaml");
     if (fs.existsSync(configPath)) {
       let config = fs.readFileSync(configPath, "utf8");
-      if (!config.includes("mcp-visibility")) {
-        // Simple check — user should verify
-        info("Add 'mcp-visibility' to plugins list in ~/.hermes/config.yaml");
+      if (!config.includes("hermes-hybrid")) {
+        info("Add 'hermes-hybrid' to plugins list in ~/.hermes/config.yaml");
       } else {
-        ok("mcp-visibility already in config.yaml");
+        ok("hermes-hybrid already in config.yaml");
       }
     }
   }
@@ -180,10 +180,10 @@ function setup() {
   // ─── Done ───
   section("Setup complete!");
   console.log(`\n  ${GREEN}Next steps:${NC}`);
-  console.log(`  • Restart Hermes:  hermes gateway restart`);
-  console.log(`  • Verify:          hermes-hybrid doctor`);
-  console.log(`  • Start server:    hermes-hybrid serve`);
-  console.log(`  • See all options: hermes-hybrid env\n`);
+  console.log(`  • Restart Hermes WebUI:  hermes-hybrid restart`);
+  console.log(`  • Verify:               hermes-hybrid doctor`);
+  console.log(`  • Start server:         hermes-hybrid serve`);
+  console.log(`  • See all options:      hermes-hybrid env\n`);
 }
 
 // ─── SERVE ────────────────────────────────────────────
@@ -225,7 +225,7 @@ function doctor() {
 
   const checks = [
     ["Hermes Agent", fs.existsSync(path.join(HERMES_HOME, "config.yaml"))],
-    ["Hermes mcp-visibility plugin", fs.existsSync(path.join(HERMES_HOME, "plugins", "mcp-visibility", "__init__.py"))],
+    ["Hermes hermes-hybrid plugin", fs.existsSync(path.join(HERMES_HOME, "plugins", "hermes-hybrid", "__init__.py"))],
     ["OpenCode", fs.existsSync(path.join(OPENCODE_CONFIG, "config.json"))],
     ["OpenCode mcp-visibility plugin", fs.existsSync(path.join(OPENCODE_CONFIG, "plugins", "mcp-visibility.ts"))],
     ["context-mode MCP server", cmd("bunx context-mode --version 2>/dev/null", { silent: true }) !== null],
@@ -296,7 +296,7 @@ function remove() {
   console.log(`  ${RED}This will remove all hermes-hybrid components.${NC}\n`);
 
   const targets = [
-    [path.join(HERMES_HOME, "plugins", "mcp-visibility"), "Hermes mcp-visibility plugin"],
+    [path.join(HERMES_HOME, "plugins", "hermes-hybrid"), "Hermes hermes-hybrid plugin"],
     [path.join(OPENCODE_CONFIG, "plugins", "mcp-visibility.ts"), "OpenCode mcp-visibility plugin"],
   ];
 
@@ -309,10 +309,48 @@ function remove() {
     }
   }
 
+  // Also check old install path
+  const oldPath = path.join(HERMES_HOME, "plugins", "mcp-visibility");
+  if (fs.existsSync(oldPath)) {
+    fs.rmSync(oldPath, { recursive: true, force: true });
+    ok("Removed legacy: mcp-visibility plugin");
+  }
+
   console.log(`\n  ${YELLOW}Note: context-mode and RTK are system-wide — uninstall separately if needed.${NC}\n`);
 }
 
-// ─── MAIN ─────────────────────────────────────────────
+// ─── RESTART ──────────────────────────────────────────
+
+function restart() {
+  console.log(BANNER);
+  section("Restarting Hermes WebUI...");
+
+  // Try systemctl restart (most common)
+  const systemctl = cmd("systemctl restart hermes-webui 2>&1", { silent: true });
+  if (systemctl !== null && !systemctl.includes("not found") && !systemctl.includes("does not exist")) {
+    ok("Hermes WebUI restarted via systemctl");
+    console.log(`\n  ${GREEN}WebUI reloading — your plugin changes are live.${NC}\n`);
+    return;
+  }
+
+  // Check if webui is a process
+  const webuiPid = cmd("pgrep -f 'hermes.*webui.*server'", { silent: true });
+  if (webuiPid) {
+    ok(`Found WebUI process (PID: ${webuiPid})`);
+    info("Restart manually: kill the process and re-run the server");
+    console.log(`\n  ${YELLOW}Manual restart:${NC}`);
+    console.log(`  kill ${webuiPid} && python /opt/hermes-webui/server.py &\n`);
+    return;
+  }
+
+  warn("WebUI not detected as systemd service or process");
+  console.log(`\n  ${YELLOW}Try manually:${NC}`);
+  console.log(`  systemctl restart hermes-webui`);
+  console.log(`  # or if not using systemd:`);
+  console.log(`  kill $(pgrep -f server.py) && python /opt/hermes-webui/server.py &\n`);
+}
+
+// ─── MAIN ───
 
 const cmd_ = process.argv[2] || "help";
 
@@ -321,6 +359,7 @@ switch (cmd_) {
   case "serve":   serve(); break;
   case "doctor":  doctor(); break;
   case "status":  status(); break;
+  case "restart": restart(); break;
   case "remove":  remove(); break;
   case "env":     envHelp(); break;
   case "help":
@@ -332,6 +371,7 @@ switch (cmd_) {
     console.log(`  ${GREEN}serve${NC}      Start context-mode MCP server`);
     console.log(`  ${GREEN}doctor${NC}     Health check all integrations`);
     console.log(`  ${GREEN}status${NC}     Show current configuration`);
+    console.log(`  ${GREEN}restart${NC}    Restart Hermes WebUI (reload plugins)`);
     console.log(`  ${GREEN}remove${NC}     Clean uninstall`);
     console.log(`  ${GREEN}env${NC}        Show environment variables\n`);
     console.log(`  ${YELLOW}Alias:${NC} hh <command>\n`);

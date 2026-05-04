@@ -7,6 +7,7 @@
 
 const GREEN = "\x1b[32m";
 const CYAN = "\x1b[36m";
+const YELLOW = "\x1b[33m";
 const BOLD = "\x1b[1m";
 const NC = "\x1b[0m";
 
@@ -18,9 +19,14 @@ ${CYAN}╔═══════════════════════�
   ${BOLD}Next:${NC} run ${GREEN}hermes-hybrid setup${NC} to auto-configure.
 
   ${BOLD}What this installs:${NC}
-  • context-mode MCP server (sandboxed execution)
-  • mcp-visibility plugins (formatting + security + cache)
-  • RTK integration (command rewriting, 60-90% token savings)
+  • context-mode MCP server (sandboxed execution, BM25 search)
+  • hermes-hybrid plugin (formatting + security + cache + aliasing + RTK + skill injection)
+  • scrapling-fetch.py (Scrapling fetcher — proxy, stealth, CSS extraction)
+  • SearXNG Docker Compose (private metasearch — no Tor, Webshare proxy)
+
+  ${BOLD}After setup, restart WebUI:${NC}
+  ${GREEN}hermes-hybrid restart${NC}          # Auto-detect and restart
+  ${GREEN}systemctl restart hermes-webui${NC} # Direct systemd
 
   ${BOLD}Granular control:${NC}
   HH_SERVER=0           → disable context-mode

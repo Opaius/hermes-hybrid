@@ -1,14 +1,14 @@
 name: hermes-hybrid
-version: 2.1.0
-description: "Hermes Agent + OpenCode token efficiency: smart formatting (md-table/YAML/truncation), unified security (hardline/approval/evasion), schema compaction, result caching, RTK wrapping. Dual plugin — Hermes + OpenCode. One npm install bundles context-mode + mcp-visibility + RTK."
+version: 2.5.0
+description: "Hermes Agent token efficiency — smart output formatting (md-table/csv/truncation), security guardrails (hardline/approval/evasion), MCP schema compaction, tool aliasing, RTK compression, file read caching, auto skill injection. Dual plugin: Hermes + OpenCode."
 author: cioky
 kind: backend
 hooks:
   on_session_start:
-    - _compact_native_tool_schemas
+    - _register_tool_aliases
   pre_tool_call:
     - pre_tool_call_security
   pre_llm_call:
-    - _compact_native_tool_schemas
-  post_tool_call:
-    - _post_tool_call_optimize
+    - _compact_schemas_pre_llm
+  transform_tool_result:
+    - _transform_tool_result

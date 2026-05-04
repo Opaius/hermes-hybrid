@@ -1,7 +1,7 @@
 {
   "name": "hermes-hybrid",
-  "version": "1.0.0",
-  "description": "Context-mode + mcp-visibility + RTK — one install for Hermes Agent & OpenCode token efficiency",
+  "version": "2.5.0",
+  "description": "Context-mode + mcp-visibility + RTK + Scrapling — token efficiency stack for Hermes Agent & OpenCode",
   "license": "MIT",
   "author": "cioky",
   "repository": "github:Opaius/hermes-hybrid",
@@ -13,17 +13,18 @@
     "bin/",
     "plugins/",
     "scripts/",
+    "searxng/",
+    "docker-compose.searxng.yml",
     "README.md"
   ],
-  "scripts": {
-    "postinstall": "node scripts/postinstall.js"
-  },
   "keywords": [
     "hermes-agent",
     "opencode",
     "context-mode",
     "mcp",
     "token-efficiency",
+    "scrapling",
+    "searxng",
     "sandbox",
     "cli"
   ],

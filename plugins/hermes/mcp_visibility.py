@@ -36,6 +36,10 @@ _SCHEMA_COMPACT = os.getenv("MCP_VISIBILITY_SCHEMA_COMPACT", "1") == "1"
 _RTK_ENABLED = os.getenv("MCP_VISIBILITY_RTK", "0") == "1"
 _RTK_PATH = os.getenv("MCP_VISIBILITY_RTK_PATH", "/root/.local/bin/rtk")
 
+_RTK_COMPRESS_ENABLED = os.getenv("HH_RTK_COMPRESS", "1") == "1"
+_FILE_CACHE_ENABLED = os.getenv("HH_FILE_CACHE", "1") == "1"
+_FILE_CACHE_MAX = int(os.getenv("HH_FILE_CACHE_MAX", "500"))
+
 _CACHE_DIR = Path(os.path.expanduser(
     os.getenv("MCP_VISIBILITY_CACHE_DIR", "~/.hermes/cache/mcp-visibility")
 ))
@@ -328,4 +332,177 @@ def pre_tool_call_security(tool_name: str, args: dict, **kwargs) -> Optional[dic
                 return {"action": "block", "message": block_msg}
         return None
 
+    return None
+
+
+
+# ── RTK-style post-execution compression ──────────────────────────
+
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07')
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    return _ANSI_RE.sub('', text)
+
+
+def _detect_shell_command(code: str) -> str:
+    """Extract primary command from shell code string."""
+    if not code:
+        return ""
+    first = code.strip().split('\n')[0].strip()
+    first = first.split('|')[0].strip()  # first pipe segment
+    parts = first.split()
+    cmd_parts = []
+    for p in parts:
+        if '=' in p and not p.startswith('-'):
+            continue  # skip env var assignments
+        cmd_parts.append(p)
+        if len(cmd_parts) >= 2:
+            break
+    return ' '.join(cmd_parts).lower()
+
+
+def _rtk_compress_shell_output(output: str, command: str) -> str:
+    """Apply generic + command-aware compression to shell output.
+
+    Strips ANSI codes, collapses blank lines, removes noise patterns.
+    Returns compressed text (may be identical to input if nothing to compress).
+    """
+    if not output or not output.strip():
+        return output
+
+    text = _strip_ansi(output)
+    lines = text.split('\n')
+
+    # Noise patterns to strip entirely
+    noise_patterns = (
+        'npm warn', 'npm notice', 'npm http',
+        'bun install', 'bun add',
+        'yarn info', 'yarn warning',
+        'warning: this download',
+        'already up to date',
+    )
+
+    # Command-specific: strip git metadata lines
+    git_noise = ()
+    if command.startswith('git '):
+        git_noise = (
+            'mode change', 'similarity index', 'rename from', 'rename to',
+            'copy from', 'copy to',
+        )
+
+    result = []
+    blank_count = 0
+    for line in lines:
+        s = line.rstrip()
+        if not s:
+            blank_count += 1
+            if blank_count <= 1:
+                result.append('')
+            continue
+        blank_count = 0
+        lower = s.lower()
+        if any(n in lower for n in noise_patterns):
+            continue
+        if git_noise and any(n in lower for n in git_noise):
+            continue
+        result.append(s)
+
+    return '\n'.join(result).strip()
+
+
+def _rtk_compress_result(tool_name: str, args: dict, result: str) -> tuple:
+    """Apply RTK-style post-execution compression to shell tool output.
+
+    Returns (compressed_result, was_changed).
+    """
+    if not _RTK_COMPRESS_ENABLED:
+        return result, False
+
+    # Only compress shell execution tools
+    if not any(t in tool_name for t in ('ctx_execute', 'ctx_batch_execute')):
+        return result, False
+
+    # Extract command and language from args
+    code = args.get('code', '')
+    language = args.get('language', '')
+    if not code:
+        inner = args.get('arguments', {})
+        code = inner.get('code', '')
+        language = inner.get('language', language)
+
+    # Only compress shell/bash output — not python/js/etc
+    if language and language not in ('shell', 'bash', 'sh', ''):
+        return result, False
+    if not code:
+        return result, False
+
+    command = _detect_shell_command(code)
+    stripped = result.strip()
+
+    # Try JSON (ctx_execute returns {output, exit_code, ...})
+    if stripped.startswith('{'):
+        try:
+            data = json.loads(stripped)
+            if 'output' in data and isinstance(data['output'], str):
+                compressed = _rtk_compress_shell_output(data['output'], command)
+                if compressed != data['output']:
+                    data['output'] = compressed
+                    return json.dumps(data, ensure_ascii=False), True
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # Raw text
+    compressed = _rtk_compress_shell_output(stripped, command)
+    if compressed != stripped:
+        return compressed, True
+    return result, False
+
+
+# ── File read caching (lean-ctx style) ────────────────────────────
+
+# In-memory cache: {file_path: (content_hash, timestamp)}
+_FILE_READ_CACHE: dict[str, tuple] = {}
+
+
+def _is_file_read_tool(tool_name: str) -> bool:
+    """Check if tool reads files (eligible for cache)."""
+    return any(p in tool_name for p in ('ctx_execute_file', 'ctx_fetch_and_index', 'read_file'))
+
+
+def _file_cache_check(tool_name: str, args: dict, result: str) -> Optional[str]:
+    """If file content unchanged from prior read, return compact stub.
+
+    Saves the LLM from re-processing identical file content.
+    Returns stub string on cache hit, None on miss (pass through original).
+    """
+    if not _FILE_CACHE_ENABLED or not _is_file_read_tool(tool_name):
+        return None
+
+    # Extract file path from args
+    file_path = args.get('path', '') or args.get('file_path', '') or args.get('url', '')
+    if not file_path:
+        inner = args.get('arguments', {})
+        file_path = inner.get('path', '') or inner.get('file_path', '') or inner.get('url', '')
+
+    # Skip web URLs (external content changes frequently)
+    if not file_path or file_path.startswith(('http://', 'https://')):
+        return None
+
+    content_hash = hashlib.sha256(result.encode('utf-8')).hexdigest()[:16]
+
+    if file_path in _FILE_READ_CACHE:
+        prev_hash, _ = _FILE_READ_CACHE[file_path]
+        if prev_hash == content_hash:
+            lines = result.count('\n') + 1
+            size_kb = len(result.encode('utf-8')) / 1024
+            return f"[cached] {file_path} — unchanged ({lines} lines, {size_kb:.1f}KB)"
+
+    # Evict oldest if at capacity
+    if len(_FILE_READ_CACHE) >= _FILE_CACHE_MAX:
+        oldest = min(_FILE_READ_CACHE, key=lambda k: _FILE_READ_CACHE[k][1])
+        del _FILE_READ_CACHE[oldest]
+
+    _FILE_READ_CACHE[file_path] = (content_hash, time.time())
     return None

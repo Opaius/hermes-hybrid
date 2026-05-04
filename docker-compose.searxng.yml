@@ -1,0 +1,82 @@
+# ────────────────────────────────────────────────────────────────
+# hermes-hybrid — SearXNG + Redis (no Tor, no Whoogle)
+# Proxy: Webshare rotating gateway for anti-block
+# ────────────────────────────────────────────────────────────────
+#
+# Setup:
+#   1. mkdir -p ./searxng && chmod 777 ./searxng
+#   2. export SEARXNG_SECRET=$(openssl rand -hex 32)
+#   3. docker compose -f docker-compose.searxng.yml up -d
+#   4. SearXNG at http://localhost:3211
+#
+# Add to Hermes Agent config (~/.hermes/config.yaml):
+#   mcp_servers:
+#     searxng:
+#       command: bunx
+#       args: ["mcp-searxng"]
+#       env:
+#         SEARXNG_URL: "http://localhost:3211"
+#         SEARXNG_SECRET: "${SEARXNG_SECRET}"
+# ────────────────────────────────────────────────────────────────
+
+services:
+  # ── Redis cache for SearXNG ──
+  redis:
+    image: valkey/valkey:8-alpine
+    container_name: searxng-redis
+    restart: unless-stopped
+    command: valkey-server --save 30 1 --loglevel warning
+    volumes:
+      - searxng_redis_data:/data
+    networks:
+      - searxng_net
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── SearXNG metasearch engine ──
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3211:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      SEARXNG_BASE_URL: "http://localhost:3211/"
+      SEARXNG_SECRET_KEY: "${SEARXNG_SECRET:?Run: export SEARXNG_SECRET=$(openssl rand -hex 32)}"
+    networks:
+      - searxng_net
+    depends_on:
+      redis:
+        condition: service_healthy
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+networks:
+  searxng_net:
+    driver: bridge
+
+volumes:
+  searxng_redis_data:
