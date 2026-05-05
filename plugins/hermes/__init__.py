@@ -1,12 +1,11 @@
 """
-hermes-hybrid v2.5 — Hermes Agent plugin for MCP tool optimization.
+hermes-hybrid v2.6.0 — Hermes Agent plugin for MCP tool optimization.
 
 Bundles context-mode + mcp-visibility + RTK for Hermes Agent.
 One npm install: npm i -g hermes-hybrid && hermes-hybrid setup.
 
 Architecture (hooks-only, no handler monkey-patching):
   register(ctx):
-    on_session_start      → register clean tool aliases from tool_aliases.yaml
     pre_tool_call         → security (blocks dangerous ctx_execute shell commands)
     pre_llm_call          → schema compaction (compact MCP tool descriptions in-place)
     transform_tool_result → file_cache → rtk_compress → output_fmt → result_cache
@@ -16,40 +15,20 @@ transform_tool_result pipeline:
   2. RTK compression — strip ANSI, collapse blanks, remove noise from shell output
   3. Output formatting — md-table/YAML/truncation/compressed-JSON (output_fmt.py)
   4. Result caching — hash-keyed cache with TTL per tool type
-
-Tool Aliasing:
-  Users configure tool_aliases.yaml: { clean_name: ugly_mcp_backend_name }
-  On session start, proxy tools are registered with clean names.
-  LLM sees "cp_terminal" instead of "mcp_context_mode_ctx_execute".
-  Dashboard/chats naturally display clean names.
-  Token savings from shorter tool names in every API call.
 """
 from __future__ import annotations
 
-import json
 import logging
-import os
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 from .mcp_visibility import (
-    _discover_all_tools,
-    _check_command_security,
     _compact_description,
     _toon_convert,
     _cache_get,
     _cache_set,
-    _RTK_ENABLED,
-    _RTK_PATH,
-    _RTK_COMPRESS_ENABLED,
-    _FILE_CACHE_ENABLED,
     _rtk_compress_result,
     _file_cache_check,
-    SHELL_EXEC_TOOLS,
-    TOOL_ALIASES,
-    TOOL_EMOJIS,
-    _safe_name,
     pre_tool_call_security,
 )
 
@@ -57,100 +36,6 @@ try:
     from .output_fmt import optimize as _optimize_result
 except ImportError:
     _optimize_result = _toon_convert
-
-# ── Tool aliasing config ──
-
-_ALIASES_CONFIG_PATH = Path(__file__).parent / "tool_aliases.yaml"
-_ALIASES_REGISTERED = False
-
-# Map clean_name → ugly_mcp_name (built from config)
-_ALIAS_MAP: dict[str, str] = {}
-# Reverse: ugly_mcp_name → clean_name (for transform_tool_result display)
-_ALIAS_REVERSE: dict[str, str] = {}
-
-
-def _load_alias_config() -> dict[str, str]:
-    """Load tool_aliases.yaml. Returns {clean_name: ugly_mcp_name}."""
-    try:
-        import yaml
-    except ImportError:
-        logger.debug("mcp-visibility: yaml not available, skipping aliases")
-        return {}
-
-    if not _ALIASES_CONFIG_PATH.exists():
-        logger.debug("mcp-visibility: %s not found, skipping aliases", _ALIASES_CONFIG_PATH)
-        return {}
-
-    try:
-        data = yaml.safe_load(_ALIASES_CONFIG_PATH.read_text())
-        aliases = data.get("aliases", {}) if isinstance(data, dict) else {}
-        return {k: v for k, v in aliases.items() if isinstance(k, str) and isinstance(v, str)}
-    except Exception as e:
-        logger.warning("mcp-visibility: failed to load %s: %s", _ALIASES_CONFIG_PATH, e)
-        return {}
-
-
-def _register_tool_aliases(**kwargs) -> None:
-    """
-    on_session_start hook: register clean-named proxy tools for all configured aliases.
-
-    Fires once per session. By this time MCP tools are loaded in registry.
-    Idempotent — only registers once per process lifetime.
-    """
-    global _ALIASES_REGISTERED, _ALIAS_MAP, _ALIAS_REVERSE
-    if _ALIASES_REGISTERED:
-        return
-
-    aliases = _load_alias_config()
-    if not aliases:
-        _ALIASES_REGISTERED = True
-        return
-
-    try:
-        from tools.registry import registry
-    except ImportError:
-        logger.debug("mcp-visibility: registry not available, skipping alias registration")
-        _ALIASES_REGISTERED = True
-        return
-
-    registered = 0
-    for clean_name, ugly_name in aliases.items():
-        # Check source tool exists
-        src_entry = registry.get_entry(ugly_name)
-        if src_entry is None:
-            logger.debug("mcp-visibility: alias '%s' → '%s' skipped (source not found)", clean_name, ugly_name)
-            continue
-
-        # Build a proxy handler that dispatches to the real MCP tool
-        _target = ugly_name  # capture for closure
-
-        def _make_proxy(target_name: str):
-            def proxy_handler(args, **kw):
-                return registry.dispatch(target_name, args, **kw)
-            return proxy_handler
-
-        try:
-            registry.register(
-                name=clean_name,
-                toolset=src_entry.toolset,
-                schema=src_entry.schema,
-                handler=_make_proxy(_target),
-                check_fn=src_entry.check_fn,
-                requires_env=src_entry.requires_env,
-                is_async=src_entry.is_async,
-                description=src_entry.description,
-                emoji=src_entry.emoji,
-            )
-            _ALIAS_MAP[clean_name] = ugly_name
-            _ALIAS_REVERSE[ugly_name] = clean_name
-            registered += 1
-        except Exception as e:
-            logger.warning("mcp-visibility: failed to register alias '%s': %s", clean_name, e)
-
-    _ALIASES_REGISTERED = True
-    if registered:
-        logger.info("mcp-visibility: registered %d tool aliases from %s", registered, _ALIASES_CONFIG_PATH.name)
-
 
 # ── Schema compaction: compact native MCP tool descriptions ──
 
@@ -217,17 +102,12 @@ def _compact_schemas_pre_llm(**kwargs) -> None:
     try:
         compacted = 0
         for native_name, compact_desc in _NATIVE_COMPACT_MAP.items():
+            compact_desc = _compact_description(compact_desc)
+
             entry = registry.get_entry(native_name)
-            if entry is None:
-                continue
-            entry.description = _compact_description(compact_desc)
-            # Also update alias tool description if it exists
-            clean_name = _ALIAS_REVERSE.get(native_name)
-            if clean_name:
-                alias_entry = registry.get_entry(clean_name)
-                if alias_entry:
-                    alias_entry.description = _compact_description(compact_desc)
-            compacted += 1
+            if entry:
+                entry.description = compact_desc
+                compacted += 1
 
         if compacted:
             logger.info("mcp-visibility: compacted %d native MCP tool descriptions", compacted)
@@ -253,13 +133,9 @@ def _transform_tool_result(
     transform_tool_result hook: format + cache MCP tool results.
 
     Pipeline: file_cache → rtk_compress → output_fmt → result_cache
-    Also handles alias tools — resolves clean_name back to mcp_ name for caching.
     """
-    # Resolve alias → original for lookup
-    actual_tool = _ALIAS_MAP.get(tool_name, tool_name)
-
-    # Only format MCP tools (or their aliases)
-    if not actual_tool.startswith("mcp_"):
+    # Only format MCP tools
+    if not tool_name.startswith("mcp_"):
         return None
 
     if not result or not isinstance(result, str):
@@ -271,42 +147,39 @@ def _transform_tool_result(
 
     try:
         # ── File read caching (lean-ctx style) ──
-        file_stub = _file_cache_check(actual_tool, args or {}, stripped)
+        file_stub = _file_cache_check(tool_name, args or {}, stripped)
         if file_stub:
-            display_name = _ALIAS_REVERSE.get(actual_tool, actual_tool)
-            logger.info("mcp-visibility: file cache hit %s", display_name)
+            logger.info("mcp-visibility: file cache hit %s", tool_name)
             return file_stub
 
         # ── RTK-style post-execution compression ──
-        rtk_compressed, rtk_changed = _rtk_compress_result(actual_tool, args or {}, stripped)
+        rtk_compressed, rtk_changed = _rtk_compress_result(tool_name, args or {}, stripped)
         if rtk_changed:
             orig_len = len(stripped)
             stripped = rtk_compressed
-            display_name = _ALIAS_REVERSE.get(actual_tool, actual_tool)
             logger.info(
                 "mcp-visibility: rtk compressed %s (%d→%d bytes, %d%% saved)",
-                display_name, orig_len, len(stripped),
+                tool_name, orig_len, len(stripped),
                 round((1 - len(stripped) / max(orig_len, 1)) * 100),
             )
 
         # ── Result cache check ──
-        cache_name = actual_tool
+        cache_name = tool_name
         cached = _cache_get(cache_name, args or {})
         if cached:
-            logger.debug("mcp-visibility: cache hit for %s (via %s)", cache_name, tool_name)
+            logger.debug("mcp-visibility: cache hit for %s", cache_name)
             return cached
 
         # ── Output formatting (md-table/YAML/truncation) ──
-        optimized = _optimize_result(stripped, actual_tool)
+        optimized = _optimize_result(stripped, tool_name)
 
         if optimized != stripped:
             orig_bytes = len(stripped.encode("utf-8"))
             opt_bytes = len(optimized.encode("utf-8"))
             saved = round((1 - opt_bytes / max(orig_bytes, 1)) * 100)
-            display_name = _ALIAS_REVERSE.get(actual_tool, actual_tool)
             logger.info(
                 "mcp-visibility: transform_tool_result formatted %s (%d→%d bytes, %d%% saved)",
-                display_name, orig_bytes, opt_bytes, saved,
+                tool_name, orig_bytes, opt_bytes, saved,
             )
 
         _cache_set(cache_name, args or {}, optimized)
@@ -320,13 +193,6 @@ def _transform_tool_result(
 
 def register(ctx) -> None:
     """Register all hooks. No handler swap — native Hermes hooks only."""
-
-    # on_session_start: register tool aliases (MCP tools available by now)
-    try:
-        ctx.register_hook("on_session_start", _register_tool_aliases)
-        logger.info("mcp-visibility: registered on_session_start alias registration hook")
-    except Exception as e:
-        logger.warning("mcp-visibility: on_session_start hook failed: %s", e)
 
     # pre_tool_call: security for ctx_execute shell commands
     try:

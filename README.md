@@ -1,4 +1,4 @@
-# hermes-hybrid v2.5.0
+# hermes-hybrid v2.6.0
 
 **One setup. Full token efficiency stack. No npm publication needed.**
 
@@ -53,7 +53,7 @@ systemctl restart hermes-webui
 
 | Component | Path | Purpose |
 |-----------|------|---------|
-| Hermes plugin | `~/.hermes/plugins/hermes-hybrid/` | Formatting, security, cache, tool aliasing, RTK compression, file cache, skill injection |
+| Hermes plugin | `~/.hermes/plugins/hermes-hybrid/` | Formatting, security, cache, RTK compression, file cache, skill injection |
 | scrapling-fetch.py | `scripts/scrapling-fetch.py` | Web fetcher — Chrome impersonation, proxy, CSS extraction, StealthyFetcher |
 | SearXNG Docker | `docker-compose.searxng.yml` | Private metasearch — no Tor, Webshare proxy, Redis cache |
 | context-mode | via `bunx context-mode` | Sandboxed execution, BM25-indexed output |
@@ -116,13 +116,12 @@ telling the agent what to do next.
 | `use_cli_fallback` | Python API failed. Agent should use `scrapling extract get ...` CLI |
 | `try_ctx_fetch_and_index` | All failed. Agent should use `ctx_fetch_and_index` as last resort |
 
-## Plugin Architecture (v2.5)
+## Plugin Architecture (v2.6)
 
-The Hermes plugin uses **four native Hermes Agent hooks** — zero monkey-patching:
+The Hermes plugin uses **three native Hermes Agent hooks** — zero monkey-patching:
 
 | Hook | When | Purpose |
 |------|------|---------|
-| `on_session_start` | New session | Register clean tool aliases from `tool_aliases.yaml` |
 | `pre_tool_call` | Before any tool | Security: block dangerous ctx_execute shell commands |
 | `pre_llm_call` | Before every LLM turn | Schema compaction + auto-inject web-fetch skill on first turn |
 | `transform_tool_result` | After every tool | 4-stage pipeline: file_cache → rtk_compress → output_fmt → result_cache |

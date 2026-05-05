@@ -1,6 +1,6 @@
 {
   "name": "hermes-hybrid",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "Context-mode + mcp-visibility + RTK + Scrapling — token efficiency stack for Hermes Agent & OpenCode",
   "license": "MIT",
   "author": "cioky",

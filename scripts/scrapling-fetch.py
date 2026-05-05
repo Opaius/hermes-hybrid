@@ -77,11 +77,13 @@ def extract_with_scrapling(args) -> dict:
     
     try:
         if args.stealth:
+            # Convert proxy string to Playwright-compatible dict
+            pw_proxy = {"server": proxy} if proxy else None
             page = StealthyFetcher.fetch(
                 args.url,
                 headless=not args.no_headless,
                 network_idle=args.network_idle,
-                proxy=proxy,
+                proxy=pw_proxy,
                 timeout=args.timeout * 1000 if args.timeout else 30000,
             )
             fetcher_used = "StealthyFetcher"
